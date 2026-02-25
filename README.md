@@ -149,36 +149,19 @@ Open `http://localhost:5173` in your browser.
 
 ---
 
-## Production Deployment
+### Unified Vercel Deployment (Recommended)
 
-### Backend → Railway
-
-1. Create a new project at [railway.app](https://railway.app)
-2. Connect your GitHub repo (or use the Railway CLI)
-3. In your project settings, set **Root Directory** to `backend/`
-4. Add a **Procfile** at `backend/Procfile`:
+1. Push the repo to GitHub.
+2. Import the project at [vercel.com/new](https://vercel.com/new).
+3. Vercel will auto-detect the configuration via `vercel.json` and the `api/` directory.
+4. Set environment variables in Vercel:
    ```
-   web: uvicorn main:app --host 0.0.0.0 --port $PORT
-   ```
-5. Set environment variables in Railway dashboard:
-   ```
-   ANTHROPIC_API_KEY=...
+   GOOGLE_API_KEY=...
    MONDAY_API_TOKEN=...
    DEALS_BOARD_ID=...
    WO_BOARD_ID=...
    ```
-6. Deploy. Railway will give you a URL like `https://skylark-bi-agent.up.railway.app`
-
-### Frontend → Vercel
-
-1. Push the repo to GitHub
-2. Import the project at [vercel.com/new](https://vercel.com/new)
-3. Set **Root Directory** to `frontend/`
-4. Add environment variable:
-   ```
-   VITE_API_URL=https://your-railway-backend-url.up.railway.app
-   ```
-5. Deploy. Vercel gives you a URL like `https://skylark-bi.vercel.app`
+5. Deploy.
 
 > **CORS:** The backend allows `*` by default. For production security, set `ALLOWED_ORIGINS` to your Vercel domain.
 
@@ -240,24 +223,16 @@ The agent handles these data quality issues automatically:
 
 ```
 e:\skylark\
-├── backend/
-│   ├── main.py              # FastAPI app: /chat, /leadership-update, /health
-│   ├── monday_client.py     # GraphQL client with pagination + caching
-│   ├── data_normalizer.py   # Field cleaners + deal/WO normalizers
-│   ├── bi_engine.py         # Analytics: pipeline, win rate, billing, AR
-│   ├── claude_agent.py      # Claude API: classification + BI answering
+├── api/
+│   ├── index.py             # FastAPI entry point
+│   ├── monday_client.py     # GraphQL client
+│   ├── data_normalizer.py   # Field cleaners
+│   ├── bi_engine.py         # Analytics
+│   ├── claude_agent.py      # AI logic
 │   └── requirements.txt
-├── frontend/
-│   ├── src/
-│   │   ├── App.jsx          # Root component with state management
-│   │   ├── api.js           # Backend API wrapper
-│   │   ├── index.css        # Global dark theme styles
-│   │   └── components/
-│   │       ├── ChatWindow.jsx       # Scrollable message list
-│   │       ├── MessageBubble.jsx    # User/assistant bubbles + markdown
-│   │       ├── QuickChips.jsx       # Starter question buttons
-│   │       └── LeadershipReport.jsx # Leadership briefing modal
-│   ├── index.html
-│   └── package.json
-└── .env.example
+├── src/                     # React source
+├── public/                  # Static assets
+├── index.html
+├── package.json
+└── vercel.json
 ```
