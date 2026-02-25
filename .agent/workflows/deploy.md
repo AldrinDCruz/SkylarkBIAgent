@@ -1,28 +1,30 @@
 ---
-description: Deploy Skylark BI Agent to Production
+description: Deploy Skylark BI Agent to Production (Render & Vercel)
 ---
 
-This workflow guides you through deploying the Backend to Railway and the Frontend to Vercel.
+This workflow guides you through deploying the Backend to Render and the Frontend to Vercel.
 
 1. **GitHub Setup**
-   - Push your code to a GitHub repository:
+   - Ensure all changes are pushed:
      ```powershell
      git add .
-     git commit -m "Deployment preparation"
+     git commit -m "Render/Vercel deployment prep"
      git push origin main
      ```
 
-2. **Backend (Railway)**
-   - Sign in to [Railway.app](https://railway.app).
-   - Click **New Project** -> **Deploy from GitHub**.
-   - Select the `skylark` repo.
-   - Set **Root Directory** to `backend`.
-   - Add environment variables: `GOOGLE_API_KEY`, `MONDAY_API_TOKEN`, `DEALS_BOARD_ID`, `WO_BOARD_ID`.
-   - Copy the generated endpoint URL.
+2. **Backend (Render)**
+   - Sign in to [Render.com](https://render.com).
+   - Click **New +** -> **Web Service**.
+   - Connect your `skylark` repo.
+   - **Root Directory**: `backend`
+   - **Build Command**: `pip install -r requirements.txt`
+   - **Start Command**: `uvicorn main:app --host 0.0.0.0 --port $PORT`
+   - Add Env Vars: `GOOGLE_API_KEY`, `MONDAY_API_TOKEN`, `DEALS_BOARD_ID`, `WO_BOARD_ID`.
+   - Copy the unique `.onrender.com` URL.
 
 3. **Frontend (Vercel)**
    - Sign in to [Vercel.com](https://vercel.com).
    - Import the `skylark` repo.
    - Set **Root Directory** to `frontend`.
-   - Add Environment Variable: `VITE_API_URL` (set to your Railway URL).
-   - Click **Build and Deploy**.
+   - Add Env Var: `VITE_API_URL` (set to your Render URL).
+   - Click **Deploy**.
