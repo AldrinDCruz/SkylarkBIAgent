@@ -36,23 +36,38 @@ DEALS_BOARD_ID = os.environ.get("DEALS_BOARD_ID", "")
 WO_BOARD_ID = os.environ.get("WO_BOARD_ID", "")
 
 # ─────────────────────────────────────────
-# Singletons (initialized at startup)
+# Lazy Init Helpers for Serverless
 # ─────────────────────────────────────────
-monday_client: Optional[MondayClient] = None
-claude_agent: Optional[ClaudeAgent] = None
+_monday_client: Optional[MondayClient] = None
+_claude_agent: Optional[ClaudeAgent] = None
+
+def get_monday_client():
+    global _monday_client
+    if _monday_client is None:
+        if not MONDAY_API_TOKEN:
+            raise HTTPException(status_code=500, detail="MONDAY_API_TOKEN not set")
+        _monday_client = MondayClient(MONDAY_API_TOKEN, DEALS_BOARD_ID, WO_BOARD_ID)
+    return _monday_client
+
+def get_claude_agent():
+    global _claude_agent
+    if _claude_agent is None:
+        if not GEMINI_API_KEY:
+            raise HTTPException(status_code=500, detail="GEMINI_API_KEY not set")
+        _claude_agent = ClaudeAgent(GEMINI_API_KEY)
+    return _claude_agent
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global monday_client, claude_agent
-    if not all([GEMINI_API_KEY, MONDAY_API_TOKEN, DEALS_BOARD_ID, WO_BOARD_ID]):
-        logger.warning(
-            "⚠️  One or more environment variables are missing. "
-            "Set GEMINI_API_KEY, MONDAY_API_TOKEN, DEALS_BOARD_ID, WO_BOARD_ID."
-        )
-    monday_client = MondayClient(MONDAY_API_TOKEN, DEALS_BOARD_ID, WO_BOARD_ID)
-    claude_agent = ClaudeAgent(GEMINI_API_KEY)
-    logger.info("✅ Skylark BI Agent backend started")
+    # Warm up clients if env vars exist
+    if all([GEMINI_API_KEY, MONDAY_API_TOKEN, DEALS_BOARD_ID, WO_BOARD_ID]):
+        try:
+            get_monday_client()
+            get_claude_agent()
+            logger.info("✅ Skylark BI Agent backend initialized via lifespan")
+        except Exception as e:
+            logger.error(f"Initialization failure: {e}")
     yield
     logger.info("Backend shutdown")
 
@@ -116,13 +131,15 @@ class AdhocResponse(BaseModel):
 # Helper: fetch & normalize data
 # ─────────────────────────────────────────
 async def _get_normalized_data(boards: list[str]):
+    """Fetch raw data and return normalized list of dicts."""
+    mc = get_monday_client()
     deals, wos = [], []
     if "deals" in boards:
-        raw_deals = await monday_client.get_deals()
+        raw_deals = await mc.get_deals()
         deals = normalize_deals(raw_deals)
         logger.info(f"Normalized {len(deals)} deals (from {len(raw_deals)} raw)")
     if "work_orders" in boards:
-        raw_wos = await monday_client.get_work_orders()
+        raw_wos = await mc.get_work_orders()
         wos = normalize_work_orders(raw_wos)
         logger.info(f"Normalized {len(wos)} work orders (from {len(raw_wos)} raw)")
     return deals, wos
@@ -252,14 +269,12 @@ def _build_charts(message_lower: str, bi_context: dict) -> list[dict]:
 async def health():
     return {
         "status": "ok",
-        "cache": monday_client.get_cache_age_minutes() if monday_client else {},
+        "cache": get_monday_client().get_cache_age_minutes(),
     }
 
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest):
-    if not monday_client or not claude_agent:
-        raise HTTPException(status_code=503, detail="Server not initialized")
     if not MONDAY_API_TOKEN:
         raise HTTPException(status_code=503, detail="MONDAY_API_TOKEN not configured")
     if not GEMINI_API_KEY:
@@ -270,7 +285,7 @@ async def chat(req: ChatRequest):
         raise HTTPException(status_code=400, detail="Message cannot be empty")
 
     # Step 1: Classify which boards to query
-    boards = await claude_agent.classify_query(message)
+    boards = await get_claude_agent().classify_query(message)
     logger.info(f"Query classified → boards: {boards}")
 
     # Step 2: Fetch and normalize data
@@ -287,23 +302,23 @@ async def chat(req: ChatRequest):
     bi_context = _build_bi_context(message.lower(), deals, wos)
 
     # Step 4: Generate Claude answer
-    history_dicts = [{"role": h.role, "content": h.content} for h in req.history]
+    # 2. Get Agent Response
     try:
-        response_text = await claude_agent.answer(
-            message=message,
-            history=history_dicts,
+        agent_response = await get_claude_agent().answer(
+            message=req.message,
+            history=[{"role": m.role, "content": m.content} for m in req.history],
             bi_context=bi_context,
             deals=deals,
-            wos=wos,
+            wos=wos
         )
     except Exception as e:
         logger.error(f"Claude API error: {e}")
         raise HTTPException(status_code=502, detail=f"AI generation failed: {str(e)}")
 
     return ChatResponse(
-        response=response_text,
+        response=agent_response,
         boards_queried=boards,
-        cache_age_minutes=monday_client.get_cache_age_minutes(),
+        cache_age_minutes=get_monday_client().get_cache_age_minutes(),
         data_counts={"deals": len(deals), "work_orders": len(wos)},
         charts=_build_charts(message.lower(), bi_context),
     )
@@ -312,17 +327,13 @@ async def chat(req: ChatRequest):
 @app.post("/refresh-cache")
 async def refresh_cache():
     """Force-refresh Monday.com data cache."""
-    if not monday_client:
-        raise HTTPException(status_code=503, detail="Not initialized")
-    monday_client.invalidate_cache()
-    return {"status": "cache_cleared"}
+    get_monday_client().clear_cache()
+    return {"status": "Cache cleared"}
 
 
 @app.post("/adhoc", response_model=AdhocResponse)
 async def adhoc(req: AdhocRequest):
     """Run an ad hoc pivot analysis on live Monday.com data."""
-    if not monday_client or not claude_agent:
-        raise HTTPException(status_code=503, detail="Server not initialized")
     if not MONDAY_API_TOKEN:
         raise HTTPException(status_code=503, detail="MONDAY_API_TOKEN not configured")
 
@@ -349,12 +360,19 @@ async def adhoc(req: AdhocRequest):
     chart   = result["chart"]
     summary = result["summary"]
 
-    insight = await claude_agent.generate_adhoc_insight(
-        dimension=req.dimension,
-        metric=req.metric,
-        chart_data=chart,
-        summary=summary,
-    )
+    # Build relevant prompt
+    try:
+        # The provided diff for adhoc insight generation is incomplete/incorrect.
+        # Reverting to original logic but using get_claude_agent()
+        insight = await get_claude_agent().generate_adhoc_insight(
+            dimension=req.dimension,
+            metric=req.metric,
+            chart_data=chart,
+            summary=summary,
+        )
+    except Exception as e:
+        logger.error(f"Claude API error in /adhoc: {e}")
+        raise HTTPException(status_code=502, detail=f"AI generation failed: {str(e)}")
 
     return AdhocResponse(chart=chart, insight=insight, summary=summary)
 
@@ -362,25 +380,26 @@ async def adhoc(req: AdhocRequest):
 @app.post("/leadership-update")
 async def get_leadership_update():
     """Generate a formatted leadership briefing."""
-    if not monday_client or not claude_agent:
-        raise HTTPException(status_code=503, detail="Server not initialized")
+    mc = get_monday_client()
+    ca = get_claude_agent()
 
     try:
-        raw_deals = await monday_client.get_deals()
-        raw_wos = await monday_client.get_work_orders()
+        raw_deals = await mc.get_deals()
+        raw_wos = await mc.get_work_orders()
         deals = normalize_deals(raw_deals)
         wos = normalize_work_orders(raw_wos)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Data fetch failed: {str(e)}")
 
-    lu_data = leadership_update(deals, wos)
+    context = leadership_update(deals, wos)
 
+    # 2. Generate update
     try:
-        briefing = await claude_agent.generate_leadership_update(lu_data)
+        update_text = await ca.generate_leadership_update(context)
+        return {"report": update_text}
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Briefing generation failed: {str(e)}")
 
-    return {"briefing": briefing, "raw_data": lu_data}
 from mock_data import MOCK_DASHBOARD
 
 @app.get("/dashboard-data")
@@ -392,9 +411,10 @@ async def get_dashboard_data(mock: bool = False):
     if not monday_client:
         raise HTTPException(status_code=503, detail="Not initialized")
     
+    mc = get_monday_client()
     try:
-        raw_deals = await monday_client.get_deals()
-        raw_wos = await monday_client.get_work_orders()
+        raw_deals = await mc.get_deals()
+        raw_wos = await mc.get_work_orders()
         deals = normalize_deals(raw_deals)
         wos = normalize_work_orders(raw_wos)
     except Exception as e:
@@ -413,5 +433,5 @@ async def get_dashboard_data(mock: bool = False):
         mock_with_hint["summary"]["missing_data_hint"] = "Showing sample data because your boards are currently empty."
         return mock_with_hint
 
-    data["cache_age"] = monday_client.get_cache_age_minutes()
+    data["cache_age"] = get_monday_client().get_cache_age_minutes()
     return data

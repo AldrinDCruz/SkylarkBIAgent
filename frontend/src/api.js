@@ -1,6 +1,6 @@
 // api.js – wrapper for all backend API calls
 
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
+const API_URL = "/api";
 
 export async function sendMessage(message, history = []) {
   const response = await fetch(`${API_URL}/chat`, {
