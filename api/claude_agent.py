@@ -64,14 +64,23 @@ class ClaudeAgent:
 
     def __init__(self, api_key: str):
         genai.configure(api_key=api_key)
-        self.model_name = "gemini-1.5-flash"
-        self.model = genai.GenerativeModel(
-            model_name=self.model_name,
-            system_instruction=SYSTEM_PROMPT,
-        )
-        self.classifier_model = genai.GenerativeModel(
-            model_name=self.model_name,
-        )
+        # Using 'latest' alias is more stable across SDK versions
+        self.model_name = "gemini-1.5-flash-latest"
+        try:
+            self.model = genai.GenerativeModel(
+                model_name=self.model_name,
+                system_instruction=SYSTEM_PROMPT,
+            )
+            self.classifier_model = genai.GenerativeModel(
+                model_name=self.model_name,
+            )
+            logger.info(f"✅ GeminiAgent initialized with {self.model_name}")
+        except Exception as e:
+            logger.error(f"❌ Gemini initialization failed: {e}")
+            # Dynamic fallback to a known ultra-stable model
+            self.model_name = "gemini-1.5-flash"
+            self.model = genai.GenerativeModel(model_name=self.model_name, system_instruction=SYSTEM_PROMPT)
+            self.classifier_model = genai.GenerativeModel(model_name=self.model_name)
 
     async def classify_query(self, message: str) -> list[str]:
         """Classify which boards to query for a given user message."""
@@ -193,6 +202,24 @@ Count: {len(upcoming)}
             return response.text
         except Exception as e:
             logger.error(f"Gemini API error in answer(): {e}")
+            if "404" in str(e) or "not found" in str(e).lower():
+                logger.warning("🔄 Primary model failed. Attempting fallback to gemini-1.5-pro...")
+                try:
+                    fallback_model = genai.GenerativeModel(model_name="gemini-1.5-pro", system_instruction=SYSTEM_PROMPT)
+                    fallback_chat = fallback_model.start_chat(history=gemini_history)
+                    response = fallback_chat.send_message(user_message)
+                    return response.text
+                except Exception as e2:
+                    logger.error(f"❌ Fallback 1 (1.5-pro) failed: {e2}")
+                    # Final attempt - 1.0 Pro
+                    try:
+                        fallback_model = genai.GenerativeModel(model_name="gemini-pro", system_instruction=SYSTEM_PROMPT)
+                        fallback_chat = fallback_model.start_chat(history=gemini_history)
+                        response = fallback_chat.send_message(user_message)
+                        return response.text
+                    except Exception as e3:
+                         logger.error(f"❌ Final fallback failed: {e3}")
+            
             if "quota" in str(e).lower() or "429" in str(e):
                 return "⚠️ **AI Quota Exceeded.** Based on the data, you have an open pipeline of **" + \
                     bi_context.get("pipeline", {}).get("open_pipeline_formatted", "N/A") + \
