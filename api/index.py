@@ -76,6 +76,7 @@ app = FastAPI(
     title="Skylark Drones BI Agent API",
     version="1.0.0",
     lifespan=lifespan,
+    root_path="/api",
 )
 
 # ─────────────────────────────────────────
@@ -267,9 +268,14 @@ def _build_charts(message_lower: str, bi_context: dict) -> list[dict]:
 
 @app.get("/health")
 async def health():
+    try:
+        cache_age = get_monday_client().get_cache_age_minutes()
+    except Exception:
+        cache_age = "Client not initialized"
+        
     return {
         "status": "ok",
-        "cache": get_monday_client().get_cache_age_minutes(),
+        "cache": cache_age,
     }
 
 
@@ -408,10 +414,11 @@ async def get_dashboard_data(mock: bool = False):
     if mock:
         return MOCK_DASHBOARD
 
-    if not monday_client:
-        raise HTTPException(status_code=503, detail="Not initialized")
-    
-    mc = get_monday_client()
+    try:
+        mc = get_monday_client()
+    except Exception as e:
+        logger.warning(f"Failed to init Monday client: {e}. Falling back to mock.")
+        return MOCK_DASHBOARD
     try:
         raw_deals = await mc.get_deals()
         raw_wos = await mc.get_work_orders()
