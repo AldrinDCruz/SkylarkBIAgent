@@ -64,7 +64,7 @@ class ClaudeAgent:
 
     def __init__(self, api_key: str):
         genai.configure(api_key=api_key)
-        self.model_name = "gemini-2.5-flash"
+        self.model_name = "gemini-1.5-flash"
         self.model = genai.GenerativeModel(
             model_name=self.model_name,
             system_instruction=SYSTEM_PROMPT,

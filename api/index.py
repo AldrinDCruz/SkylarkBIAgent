@@ -4,6 +4,7 @@ FastAPI application - entry point with /chat and /leadership-update endpoints.
 """
 
 import os
+import sys
 import logging
 from contextlib import asynccontextmanager
 from typing import Optional
@@ -12,6 +13,9 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
+
+# Ensure the 'api' directory is in sys.path for relative imports on Vercel
+sys.path.append(os.path.dirname(__file__))
 
 from monday_client import MondayClient
 from data_normalizer import normalize_deals, normalize_work_orders
@@ -266,16 +270,34 @@ def _build_charts(message_lower: str, bi_context: dict) -> list[dict]:
 # Endpoints
 # ─────────────────────────────────────────
 
+@app.get("/")
+async def root():
+    return {
+        "status": "online",
+        "message": "Skylark BI Agent API is running",
+        "endpoints": ["/health", "/dashboard-data", "/chat", "/leadership-update"]
+    }
+
 @app.get("/health")
 async def health():
     try:
-        cache_age = get_monday_client().get_cache_age_minutes()
-    except Exception:
-        cache_age = "Client not initialized"
+        client = get_monday_client()
+        cache_age = client.get_cache_age_minutes()
+        init_status = "Initialized"
+    except Exception as e:
+        init_status = f"Initialization Error: {str(e)}"
+        cache_age = {}
         
     return {
         "status": "ok",
+        "initialization": init_status,
         "cache": cache_age,
+        "env": {
+            "MONDAY_TOKEN_SET": bool(MONDAY_API_TOKEN),
+            "GEMINI_KEY_SET": bool(GEMINI_API_KEY),
+            "DEALS_BOARD_SET": bool(DEALS_BOARD_ID),
+            "WO_BOARD_SET": bool(WO_BOARD_ID),
+        }
     }
 
 
